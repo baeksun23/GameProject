@@ -825,11 +825,16 @@
 			if (st === 'main' || st === 'select' || st === 'pause') return;
 			if (stop > 0) { stop--; return; }
 
-			// [ONLINE] - P2P 키 입력 동기화 및 5프레임당 상태 보정
-			if (mode === 'online' && dc && dc.readyState === 'open') {
-				dc.send(JSON.stringify({ t: 'in', k: inp[localPlayerIndex] }));
+			// [ONLINE] - WebSocket 서버 중계. 입력은 초당 약 20회 전송하고
+			// 버튼 입력(pj/pl/ph/ps)은 프레임 사이에 사라지지 않도록 즉시 전송합니다.
+			if (mode === 'online' && dc && dc.readyState === WebSocket.OPEN) {
+				const localInput = inp[localPlayerIndex];
+				const hasEdgeInput = localInput.pj || localInput.pl || localInput.ph || localInput.ps;
+				if (fc % 3 === 0 || hasEdgeInput) {
+					sendRealtimeGame({ t: 'in', k: { ...localInput } });
+				}
 				if (localPlayerIndex === 0 && fc % 5 === 0 && P) {
-					dc.send(JSON.stringify({ t: 'sync', p0: window.extractState(P[0]), p1: window.extractState(P[1]) }));
+					sendRealtimeGame({ t: 'sync', p0: window.extractState(P[0]), p1: window.extractState(P[1]) });
 				}
 			}
 
@@ -1301,27 +1306,20 @@
 
 		let prevState = 'intro';
 
-		// [ONLINE] - Express.js + Neon API + WebRTC
+		// [ONLINE] - Vercel/Neon 방 관리 + Cloudflare Durable Objects WebSocket 중계
 		let localPlayerIndex = 0;
 		let remotePlayerIndex = 1;
 		let onlineRole = null;
-		let dc = null;
-		let pc = null;
+		let dc = null; // 기존 게임 코드 호환을 위해 이름은 유지하되 WebSocket을 보관합니다.
 		let localSelectedJob = null;
 		let remoteSelectedJob = null;
 		let playerToken = localStorage.getItem('jobfighter_token') || null;
 		let playerId = localStorage.getItem('jobfighter_player_id') || null;
 		let playerNickname = localStorage.getItem('jobfighter_nickname') || null;
-		// 페이지 시작 시 전적 조회와 HOST/JOIN 클릭이 겹쳐도
-		// 게스트 계정을 중복 생성하거나 인증 정보를 서로 덮어쓰지 않도록 공유합니다.
 		let authPromise = null;
-		let signalPollingStopped = false;
 		let roomCode = null;
-		let signalTimer = null;
-		let lastSignalId = '0';
-		let signalPolling = false;
-		let remoteDescriptionReady = false;
-		let pendingRemoteCandidates = [];
+		let onlineSelectionStarted = false;
+		let socketConnectPromise = null;
 
 		async function apiRequest(path, options = {}) {
 			const headers = { ...(options.headers || {}) };
@@ -1395,147 +1393,140 @@
 			}
 		}
 
-		const iceServers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
-
-		// 온라인 연결이 어느 단계에서 멈추는지 화면과 개발자 콘솔에 표시합니다.
-		function updateWebRtcStatus(eventName = 'state') {
-			if (!pc) return;
-			const ice = pc.iceConnectionState;
-			const connection = pc.connectionState;
-			const signaling = pc.signalingState;
-			console.info(`[WebRTC ${onlineRole || 'peer'}] ${eventName}`, {
-				iceConnectionState: ice,
-				connectionState: connection,
-				signalingState: signaling,
-				dataChannelState: dc ? dc.readyState : 'not-created',
-				roomCode
-			});
-
-			let message = '상대방의 연결 정보를 기다리고 있습니다...';
-			if (connection === 'connected' || ice === 'connected' || ice === 'completed') {
-				message = dc && dc.readyState === 'open'
-					? '상대방과 연결되었습니다. 게임을 준비합니다...'
-					: '인터넷 연결 경로가 설정되었습니다. 게임 통신 채널을 여는 중입니다...';
-			} else if (connection === 'failed' || ice === 'failed') {
-				message = '상대방의 연결 경로를 찾지 못했습니다. 시그널 교환은 되었지만 네트워크가 P2P 연결을 차단했을 수 있습니다. TURN 서버 설정이 필요할 수 있습니다.';
-			} else if (connection === 'disconnected' || ice === 'disconnected') {
-				message = '상대방과의 네트워크 연결이 끊겼습니다. 재연결을 확인하고 있습니다...';
-			} else if (ice === 'checking' || connection === 'connecting') {
-				message = '상대방과 인터넷 연결을 시도하고 있습니다... (ICE checking)';
-			} else if (pc.iceGatheringState === 'gathering') {
-				message = '내 기기의 네트워크 연결 정보를 수집하고 있습니다...';
-			} else if (signaling === 'have-local-offer') {
-				message = '방 생성 완료. 상대방의 접속과 응답을 기다리고 있습니다...';
-			} else if (signaling === 'have-remote-offer') {
-				message = '방장의 연결 정보를 받았습니다. 응답을 보내고 있습니다...';
-			}
-
-			if (lobbyInfo && onlineLobby && onlineLobby.style.display !== 'none') {
-				const codeLine = roomCode ? `방 번호: [ ${roomCode} ]\n` : '';
-				lobbyInfo.textContent = `${codeLine}${message}`;
-			}
-		}
-
-		function attachWebRtcDiagnostics(role) {
-			if (!pc) return;
-			onlineRole = role;
-			pc.onconnectionstatechange = () => updateWebRtcStatus('connectionstatechange');
-			pc.oniceconnectionstatechange = () => updateWebRtcStatus('iceconnectionstatechange');
-			pc.onicegatheringstatechange = () => updateWebRtcStatus('icegatheringstatechange');
-			pc.onsignalingstatechange = () => updateWebRtcStatus('signalingstatechange');
-			pc.onicecandidateerror = event => {
-				console.warn(`[WebRTC ${role}] ICE candidate error`, {
-					url: event.url,
-					errorCode: event.errorCode,
-					errorText: event.errorText
-				});
-			};
-		}
-
-		async function sendSignal(type, payload) {
+		// Cloudflare Durable Objects WebSocket 방 중계
+		// Vercel은 방 참여 여부를 검증하고 5분짜리 접속 티켓을 발급합니다.
+		async function connectRealtimeSocket() {
 			if (!roomCode) throw new Error('대전방 코드가 없습니다.');
-			await apiRequest(`/rooms/${encodeURIComponent(roomCode)}/signals`, {
-				method: 'POST', body: { type, payload }
+			const ticket = await apiRequest(`/realtime-ticket?room=${encodeURIComponent(roomCode)}`);
+			if (!ticket.websocketUrl || !ticket.token) {
+				throw new Error('실시간 접속 정보를 받지 못했습니다. Vercel의 실시간 서버 설정을 확인해 주세요.');
+			}
+			if (ticket.role !== onlineRole) {
+				throw new Error('방 역할 정보가 일치하지 않습니다. 페이지를 새로고침한 뒤 다시 접속해 주세요.');
+			}
+
+			const socket = new WebSocket(ticket.websocketUrl);
+			dc = socket;
+			const connectPromise = new Promise((resolve, reject) => {
+				let authenticated = false;
+				let settled = false;
+				const finish = (error) => {
+					if (settled) return;
+					settled = true;
+					error ? reject(error) : resolve();
+				};
+
+				socket.addEventListener('open', () => {
+					try {
+						socket.send(JSON.stringify({ type: 'auth', token: ticket.token }));
+					} catch (error) {
+						finish(new Error('실시간 서버에 인증 정보를 보내지 못했습니다.'));
+					}
+				}, { once: true });
+
+				socket.addEventListener('message', (event) => {
+					let packet;
+					try { packet = JSON.parse(event.data); }
+					catch { console.warn('실시간 서버에서 잘못된 메시지를 받았습니다.'); return; }
+
+					if (packet.type === 'authenticated') {
+						if (packet.role !== onlineRole) {
+							finish(new Error('실시간 서버가 다른 플레이어 역할로 인증했습니다.'));
+							socket.close();
+							return;
+						}
+						authenticated = true;
+						console.info(`[Realtime ${onlineRole.toUpperCase()}] Cloudflare WebSocket 인증 완료`, { roomCode });
+						finish();
+						return;
+					}
+					if (packet.type === 'waiting') {
+						if (!onlineSelectionStarted && lobbyInfo) {
+							lobbyInfo.textContent = `방 번호: [ ${roomCode} ]\n상대 플레이어의 접속을 기다리고 있습니다...`;
+						}
+						return;
+					}
+					if (packet.type === 'peer-ready') {
+						enterOnlineCharacterSelection();
+						return;
+					}
+					if (packet.type === 'game') {
+						handleGameMessage(packet.data);
+						return;
+					}
+					if (packet.type === 'peer-left') {
+						console.warn('[Realtime] 상대 플레이어 연결 종료:', packet.role || 'unknown');
+						if (lobbyInfo && onlineLobby.style.display !== 'none') {
+							lobbyInfo.textContent = '상대 플레이어의 연결이 종료되었습니다. 새 방을 만들어 다시 접속해 주세요.';
+						}
+						return;
+					}
+					if (packet.type === 'error') {
+						const message = packet.message || '실시간 서버에서 연결을 거부했습니다.';
+						console.error('[Realtime] 서버 오류:', packet.code, message);
+						if (!authenticated) finish(new Error(message));
+						else if (lobbyInfo) lobbyInfo.textContent = message;
+					}
+				});
+
+				socket.addEventListener('error', () => {
+					console.error('[Realtime] WebSocket 연결 오류');
+					if (!authenticated) finish(new Error('Cloudflare 실시간 서버에 연결하지 못했습니다. Worker 주소와 배포 상태를 확인해 주세요.'));
+				});
+
+				socket.addEventListener('close', (event) => {
+					if (!authenticated) {
+						finish(new Error(`실시간 연결이 인증 전에 종료되었습니다. (코드 ${event.code})`));
+					}
+					if (dc === socket) dc = null;
+					if (roomCode && onlineLobby && onlineLobby.style.display !== 'none') {
+						lobbyInfo.textContent = '실시간 연결이 종료되었습니다. 새 방을 만들어 다시 접속해 주세요.';
+					}
+					if (socketConnectPromise === connectPromise) socketConnectPromise = null;
+				});
 			});
+			socketConnectPromise = connectPromise;
+
+			return connectPromise;
 		}
 
-		async function addRemoteCandidate(candidate) {
-			if (!candidate || !pc) return;
-			if (!remoteDescriptionReady) {
-				pendingRemoteCandidates.push(candidate);
-				return;
-			}
+		function enterOnlineCharacterSelection() {
+			if (onlineSelectionStarted) return;
+			onlineSelectionStarted = true;
+			console.info('[Realtime] 양쪽 플레이어가 연결되었습니다. 캐릭터 선택을 시작합니다.');
+			st = 'select'; jobs = []; P = null; localSelectedJob = null; remoteSelectedJob = null;
+			sel.style.display = 'flex'; mainMenu.style.display = 'none';
+			onlineLobby.style.display = 'none';
+			selTitle.textContent = 'SELECT YOUR CHARACTER';
+		}
+
+		function sendRealtimeGame(data) {
+			if (!dc || dc.readyState !== WebSocket.OPEN) return false;
 			try {
-				await pc.addIceCandidate(new RTCIceCandidate(candidate));
-			} catch (err) {
-				console.warn('상대 ICE 후보 적용 실패:', err);
+				dc.send(JSON.stringify({ type: 'game', data }));
+				return true;
+			} catch (error) {
+				console.warn('게임 데이터를 전송하지 못했습니다:', error);
+				return false;
 			}
 		}
 
-		async function flushRemoteCandidates() {
-			if (!pc || !remoteDescriptionReady || !pendingRemoteCandidates.length) return;
-			const candidates = pendingRemoteCandidates.splice(0);
-			for (const candidate of candidates) await addRemoteCandidate(candidate);
-		}
-
-		async function handleSignal(signal) {
-			if (!pc || !signal) return;
-			console.info(`[WebRTC ${onlineRole || 'peer'}] 신호 수신:`, signal.type, signal.id);
-			if (signal.type === 'offer' && localPlayerIndex === 1 && !pc.remoteDescription) {
-				await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
-				remoteDescriptionReady = true;
-				await flushRemoteCandidates();
-				const answer = await pc.createAnswer();
-				await pc.setLocalDescription(answer);
-				await sendSignal('answer', pc.localDescription.toJSON());
-				lobbyInfo.textContent = '호스트와 연결 중입니다...';
-			} else if (signal.type === 'answer' && localPlayerIndex === 0 && !pc.remoteDescription) {
-				await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
-				remoteDescriptionReady = true;
-				await flushRemoteCandidates();
-			} else if (signal.type === 'candidate') {
-				await addRemoteCandidate(signal.payload.candidate);
-			}
-		}
-
-		function stopSignalPolling() {
-			signalPollingStopped = true;
-			if (signalTimer) clearTimeout(signalTimer);
-			signalTimer = null;
-			signalPolling = false;
-		}
-
-		async function pollSignals() {
-			if (signalPolling || !roomCode || !pc || (dc && dc.readyState === 'open')) return;
-			signalPolling = true;
-			try {
-				const data = await apiRequest(`/rooms/${encodeURIComponent(roomCode)}/signals?after=${encodeURIComponent(lastSignalId)}`);
-				if ((data.signals || []).length) console.info(`[WebRTC ${onlineRole || 'peer'}] 새 연결 신호 ${data.signals.length}개 수신`);
-				for (const signal of data.signals || []) {
-					lastSignalId = String(signal.id);
-					await handleSignal(signal);
+		function handleGameMessage(msg) {
+			if (!msg || typeof msg !== 'object') return;
+			if (msg.t === 'sel') {
+				remoteSelectedJob = msg.job;
+				if (localSelectedJob && remoteSelectedJob) {
+					jobs = localPlayerIndex === 0 ? [localSelectedJob, remoteSelectedJob] : [remoteSelectedJob, localSelectedJob];
+					sel.style.display = 'none'; btnPause.style.display = 'block'; reset(true);
 				}
-			} catch (e) {
-				console.warn('대전 연결 정보 수신 중:', e.message, e.code || '');
-				if (lobbyInfo && onlineLobby.style.display !== 'none') lobbyInfo.textContent = `연결 확인 중...\n${e.message}`;
-				// 방이 없거나 만료됐다는 서버의 확정 응답이면 0.9초마다
-				// 같은 404를 반복 요청하지 않고 폴링을 종료합니다.
-				if (['ROOM_NOT_FOUND', 'ROOM_EXPIRED', 'ROOM_MEMBER_MISMATCH'].includes(e.code)) {
-					signalPollingStopped = true;
-				}
-			} finally {
-				signalPolling = false;
-				if (!signalPollingStopped && roomCode && pc && !(dc && dc.readyState === 'open')) {
-					signalTimer = setTimeout(pollSignals, 900);
+			} else if (msg.t === 'in') {
+				inp[remotePlayerIndex] = msg.k;
+			} else if (msg.t === 'sync' && localPlayerIndex === 1) {
+				if (P) {
+					if (msg.p0) { P[0].x = msg.p0.x; P[0].y = msg.p0.y; P[0].hp = msg.p0.hp; P[0].gStam = msg.p0.gStam; P[0].face = msg.p0.face; }
+					if (msg.p1) { P[1].x = msg.p1.x; P[1].y = msg.p1.y; P[1].hp = msg.p1.hp; P[1].gStam = msg.p1.gStam; P[1].face = msg.p1.face; }
 				}
 			}
-		}
-
-		function startSignalPolling() {
-			stopSignalPolling();
-			signalPollingStopped = false;
-			lastSignalId = '0';
-			pollSignals();
 		}
 
 		async function hostRoom() {
@@ -1543,82 +1534,43 @@
 				await doAuth();
 				const room = await apiRequest('/rooms', { method: 'POST', body: {} });
 				roomCode = room.code;
-				lobbyInfo.textContent = `방 번호: [ ${roomCode} ]\n상대방을 기다리고 있습니다...`;
-
-				pc = new RTCPeerConnection(iceServers);
-				dc = pc.createDataChannel('game-sync');
-				setupDataChannel();
-				pc.onicecandidate = e => {
-					if (e.candidate) sendSignal('candidate', { candidate: e.candidate.toJSON() })
-						.catch(err => { console.error('호스트 ICE 후보 전송 실패:', err); updateWebRtcStatus('ICE 후보 전송 실패'); });
-				};
-				attachWebRtcDiagnostics('HOST');
-
-				const offer = await pc.createOffer();
-				await pc.setLocalDescription(offer);
-				await sendSignal('offer', pc.localDescription.toJSON());
-				updateWebRtcStatus('호스트 offer 전송 완료');
-				startSignalPolling();
-			} catch (e) {
-				lobbyInfo.textContent = `방 생성 오류: ${e.message}`;
-				console.error(e);
+				onlineRole = 'host';
+				onlineSelectionStarted = false;
+				lobbyInfo.textContent = `방 번호: [ ${roomCode} ]\n실시간 서버에 접속하고 있습니다...`;
+				await connectRealtimeSocket();
+				if (!onlineSelectionStarted) {
+					lobbyInfo.textContent = `방 번호: [ ${roomCode} ]\n상대 플레이어의 접속을 기다리고 있습니다...`;
+				}
+			} catch (error) {
+				lobbyInfo.textContent = `방 생성 오류: ${error.message}`;
+				console.error('방 생성/실시간 접속 실패:', error);
+				if (dc) { try { dc.close(); } catch { /* ignored */ } dc = null; }
+				if (roomCode && playerToken) {
+					apiRequest(`/rooms/${encodeURIComponent(roomCode)}/leave`, { method: 'POST', body: {} }).catch(() => {});
+				}
 			}
 		}
 
 		async function joinRoom(code) {
 			try {
-				lobbyInfo.textContent = '방을 확인하고 있습니다...';
+				lobbyInfo.textContent = '대전방을 확인하고 있습니다...';
 				await doAuth();
 				const normalizedCode = String(code).trim();
 				await apiRequest(`/rooms/${encodeURIComponent(normalizedCode)}/join`, { method: 'POST', body: {} });
 				roomCode = normalizedCode;
-
-				pc = new RTCPeerConnection(iceServers);
-				pc.ondatachannel = e => { dc = e.channel; setupDataChannel(); };
-				pc.onicecandidate = e => {
-					if (e.candidate) sendSignal('candidate', { candidate: e.candidate.toJSON() })
-						.catch(err => { console.error('참가자 ICE 후보 전송 실패:', err); updateWebRtcStatus('ICE 후보 전송 실패'); });
-				};
-				attachWebRtcDiagnostics('GUEST');
-
-				lobbyInfo.textContent = '호스트의 연결 정보를 기다리고 있습니다...';
-				startSignalPolling();
-			} catch (e) {
-				lobbyInfo.textContent = `참가 오류: ${e.message}`;
-				console.error(e);
-			}
-		}
-
-		function setupDataChannel() {
-			dc.onopen = () => {
-				stopSignalPolling();
-				onlineLobby.style.display = 'none';
-				st = 'select'; jobs = []; P = null; localSelectedJob = null; remoteSelectedJob = null;
-				sel.style.display = 'flex'; mainMenu.style.display = 'none';
-				selTitle.textContent = 'SELECT YOUR CHARACTER';
-			};
-			dc.onmessage = e => {
-				let msg;
-				try { msg = JSON.parse(e.data); } catch (err) { return; }
-				if (msg.t === 'sel') {
-					remoteSelectedJob = msg.job;
-					if (localSelectedJob && remoteSelectedJob) {
-						jobs = localPlayerIndex === 0 ? [localSelectedJob, remoteSelectedJob] : [remoteSelectedJob, localSelectedJob];
-						sel.style.display = 'none'; btnPause.style.display = 'block'; reset(true);
-					}
-				} else if (msg.t === 'in') {
-					inp[remotePlayerIndex] = msg.k;
-				} else if (msg.t === 'sync' && localPlayerIndex === 1) {
-					if (P) {
-						if (msg.p0) { P[0].x = msg.p0.x; P[0].y = msg.p0.y; P[0].hp = msg.p0.hp; P[0].gStam = msg.p0.gStam; P[0].face = msg.p0.face; }
-						if (msg.p1) { P[1].x = msg.p1.x; P[1].y = msg.p1.y; P[1].hp = msg.p1.hp; P[1].gStam = msg.p1.gStam; P[1].face = msg.p1.face; }
-					}
+				onlineRole = 'guest';
+				onlineSelectionStarted = false;
+				lobbyInfo.textContent = 'Cloudflare 실시간 서버에 접속하고 있습니다...';
+				await connectRealtimeSocket();
+				if (!onlineSelectionStarted) lobbyInfo.textContent = '방장과 연결되었습니다. 게임을 준비하고 있습니다...';
+			} catch (error) {
+				lobbyInfo.textContent = `참가 오류: ${error.message}`;
+				console.error('방 참가/실시간 접속 실패:', error);
+				if (dc) { try { dc.close(); } catch { /* ignored */ } dc = null; }
+				if (roomCode && playerToken) {
+					apiRequest(`/rooms/${encodeURIComponent(roomCode)}/leave`, { method: 'POST', body: {} }).catch(() => {});
 				}
-			};
-			dc.onclose = () => {
-				if (st === 'fight' || st === 'intro') lobbyInfo.textContent = '상대방의 연결이 종료되었습니다.';
-			};
-			dc.onerror = e => console.error('WebRTC 데이터 채널 오류:', e);
+			}
 		}
 
 		window.extractState = function (obj) {
@@ -1627,13 +1579,11 @@
 
 		function showMainMenu() {
 			st = 'main';
-			stopSignalPolling();
 			if (roomCode && playerToken) {
 				apiRequest(`/rooms/${encodeURIComponent(roomCode)}/leave`, { method: 'POST', body: {} }).catch(() => { });
 			}
-			roomCode = null; onlineRole = null; remoteDescriptionReady = false; pendingRemoteCandidates = [];
-			if (dc) { dc.close(); dc = null; }
-			if (pc) { pc.close(); pc = null; }
+			roomCode = null; onlineRole = null; onlineSelectionStarted = false; socketConnectPromise = null;
+			if (dc) { try { dc.close(); } catch { /* ignored */ } dc = null; }
 			mainMenu.style.display = 'flex'; sel.style.display = 'none'; pauseMenu.style.display = 'none'; btnPause.style.display = 'none'; onlineLobby.style.display = 'none';
 			loadStats();
 		}
@@ -1699,7 +1649,7 @@
 					if (localSelectedJob) return;
 					localSelectedJob = k;
 					selTitle.textContent = 'WAITING FOR OPPONENT...';
-					if (dc && dc.open) dc.send(JSON.stringify({ t: 'sel', job: k }));
+					sendRealtimeGame({ t: 'sel', job: k });
 					if (localSelectedJob && remoteSelectedJob) {
 						jobs = localPlayerIndex === 0 ? [localSelectedJob, remoteSelectedJob] : [remoteSelectedJob, localSelectedJob];
 						sel.style.display = 'none'; btnPause.style.display = 'block'; reset(true);
