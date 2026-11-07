@@ -1,6 +1,6 @@
 # 직업 대전 - NEON CITY REMASTERED
 
-## < OFFLINE >
+## OFFLINE
 - **[ P1 ]** 
   - 이동: `WASD` (`W`: 점프, `S`: 가드)
   - 조작: `J` (약), `K` (강), `L` (스킬)
@@ -11,6 +11,9 @@
 
 ---
 
-## < ONLINE >
+## ONLINE
 - **[ HOST ]** `ONLINE PVP: HOST`
 - **[ JOIN ]** HOST에게 방 ID를 받은 후 `ONLINE PVP: JOIN`에서 방 ID 입력하여 참가
+
+## 참고
+- 만약 `ONLINE PVP: JOJN`에서 방 ID 입력이 안 될 경우, ID를 붙여넣기하기
