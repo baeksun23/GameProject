@@ -472,6 +472,14 @@ app.post('/api/rooms/:code/leave', requirePlayer, async (req, res) => {
   }
 });
 
+// Vercel 정적 CDN에서 index.html이 매칭되지 않는 경우를 위한 페이지 fallback.
+// public/index.html은 vercel.json의 includeFiles 설정으로 Function에도 포함합니다.
+app.get(['/', '/index.html'], (_req, res, next) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'index.html'), (error) => {
+    if (error) next(error);
+  });
+});
+
 // API 경로 오타를 HTML 404 대신 JSON으로 알려줍니다.
 app.use('/api', (_req, res) => {
   res.status(404).json({ error: '존재하지 않는 API 경로입니다.', code: 'API_ROUTE_NOT_FOUND' });
