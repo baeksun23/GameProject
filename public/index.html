@@ -260,6 +260,40 @@
 			color: var(--acc);
 		}
 
+		/* 첫 화면 제목과 메뉴가 검은 게임 화면 밖으로 밀려나지 않도록 보정 */
+		#main-menu {
+			padding: 14px 12px;
+			overflow-y: auto;
+			overscroll-behavior: contain;
+			-webkit-overflow-scrolling: touch;
+			justify-content: safe center;
+			touch-action: pan-y;
+		}
+
+		#main-menu .title-large {
+			font-size: clamp(28px, 4vw, 34px);
+			line-height: 1.12;
+			margin: 0 0 12px;
+			flex: 0 0 auto;
+		}
+
+		#main-menu .title-large span {
+			display: inline-block;
+			font-size: clamp(16px, 2.2vw, 19px);
+			margin-top: 3px;
+		}
+
+		#main-menu .menu-btns {
+			flex-shrink: 0;
+		}
+
+		#main-menu .controls-info {
+			margin-top: 12px;
+			padding: 11px;
+			font-size: 12px;
+			line-height: 1.55;
+		}
+
 		.menu-btns {
 			display: flex;
 			flex-direction: column;
@@ -335,7 +369,54 @@
 			border-color: #fff;
 		}
 
+		@media (max-height: 700px) {
+			#main-menu {
+				justify-content: flex-start;
+				gap: 10px;
+			}
+
+			#main-menu .title-large {
+				font-size: 30px;
+				margin-bottom: 4px;
+			}
+
+			#main-menu .controls-info {
+				margin-top: 4px;
+			}
+		}
+
 		@media (max-width: 600px) {
+			#main-menu {
+				justify-content: flex-start;
+				gap: 9px;
+				padding: 10px;
+			}
+
+			#main-menu .title-large {
+				font-size: clamp(25px, 7vw, 30px);
+				margin-bottom: 2px;
+			}
+
+			#main-menu .title-large span {
+				font-size: clamp(14px, 4vw, 17px);
+			}
+
+			#main-menu .menu-btns {
+				width: min(280px, 100%);
+				gap: 8px;
+			}
+
+			#main-menu .menu-btn {
+				padding: 10px;
+				font-size: 14px;
+			}
+
+			#main-menu .controls-info {
+				font-size: 11px;
+				padding: 9px;
+				margin-top: 2px;
+			}
+
 			#jb {
 				grid-template-columns: repeat(3, 1fr);
 			}
@@ -1230,6 +1311,10 @@
 		let playerToken = localStorage.getItem('jobfighter_token') || null;
 		let playerId = localStorage.getItem('jobfighter_player_id') || null;
 		let playerNickname = localStorage.getItem('jobfighter_nickname') || null;
+		// 페이지 시작 시 전적 조회와 HOST/JOIN 클릭이 겹쳐도
+		// 게스트 계정을 중복 생성하거나 인증 정보를 서로 덮어쓰지 않도록 공유합니다.
+		let authPromise = null;
+		let signalPollingStopped = false;
 		let roomCode = null;
 		let signalTimer = null;
 		let lastSignalId = '0';
@@ -1247,24 +1332,40 @@
 				body: options.body === undefined ? undefined : JSON.stringify(options.body)
 			});
 			const data = await response.json().catch(() => ({}));
-			if (!response.ok) throw new Error(data.error || `서버 요청 실패 (${response.status})`);
+			if (!response.ok) {
+				const error = new Error(data.error || `서버 요청 실패 (${response.status})`);
+				error.status = response.status;
+				error.code = data.code || null;
+				throw error;
+			}
 			return data;
 		}
 
 		async function doAuth() {
 			if (playerToken && playerId) return { id: playerId, nickname: playerNickname };
-			const nickname = playerNickname || `전사${Math.floor(1000 + Math.random() * 9000)}`;
-			const data = await apiRequest('/auth/guest', {
-				method: 'POST',
-				body: { nickname }
-			});
-			playerToken = data.token;
-			playerId = data.player.id;
-			playerNickname = data.player.nickname;
-			localStorage.setItem('jobfighter_token', playerToken);
-			localStorage.setItem('jobfighter_player_id', playerId);
-			localStorage.setItem('jobfighter_nickname', playerNickname);
-			return data.player;
+			// loadStats(), hostRoom(), joinRoom() 등이 동시에 호출해도
+			// 하나의 게스트 생성 요청과 동일한 토큰/플레이어 ID를 공유합니다.
+			if (!authPromise) {
+				authPromise = (async () => {
+					const nickname = playerNickname || `전사${Math.floor(1000 + Math.random() * 9000)}`;
+					const data = await apiRequest('/auth/guest', {
+						method: 'POST',
+						body: { nickname }
+					});
+					playerToken = data.token;
+					playerId = data.player.id;
+					playerNickname = data.player.nickname;
+					localStorage.setItem('jobfighter_token', playerToken);
+					localStorage.setItem('jobfighter_player_id', playerId);
+					localStorage.setItem('jobfighter_nickname', playerNickname);
+					return data.player;
+				})();
+			}
+			try {
+				return await authPromise;
+			} finally {
+				authPromise = null;
+			}
 		}
 
 		async function loadStats() {
@@ -1341,6 +1442,7 @@
 		}
 
 		function stopSignalPolling() {
+			signalPollingStopped = true;
 			if (signalTimer) clearTimeout(signalTimer);
 			signalTimer = null;
 			signalPolling = false;
@@ -1356,11 +1458,16 @@
 					await handleSignal(signal);
 				}
 			} catch (e) {
-				console.warn('대전 연결 정보 수신 중:', e.message);
+				console.warn('대전 연결 정보 수신 중:', e.message, e.code || '');
 				if (lobbyInfo && onlineLobby.style.display !== 'none') lobbyInfo.textContent = `연결 확인 중...\n${e.message}`;
+				// 방이 없거나 만료됐다는 서버의 확정 응답이면 0.9초마다
+				// 같은 404를 반복 요청하지 않고 폴링을 종료합니다.
+				if (['ROOM_NOT_FOUND', 'ROOM_EXPIRED', 'ROOM_MEMBER_MISMATCH'].includes(e.code)) {
+					signalPollingStopped = true;
+				}
 			} finally {
 				signalPolling = false;
-				if (roomCode && pc && !(dc && dc.readyState === 'open')) {
+				if (!signalPollingStopped && roomCode && pc && !(dc && dc.readyState === 'open')) {
 					signalTimer = setTimeout(pollSignals, 900);
 				}
 			}
@@ -1368,6 +1475,7 @@
 
 		function startSignalPolling() {
 			stopSignalPolling();
+			signalPollingStopped = false;
 			lastSignalId = '0';
 			pollSignals();
 		}
