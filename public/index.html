@@ -1304,6 +1304,7 @@
 		// [ONLINE] - Express.js + Neon API + WebRTC
 		let localPlayerIndex = 0;
 		let remotePlayerIndex = 1;
+		let onlineRole = null;
 		let dc = null;
 		let pc = null;
 		let localSelectedJob = null;
@@ -1396,6 +1397,61 @@
 
 		const iceServers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
+		// 온라인 연결이 어느 단계에서 멈추는지 화면과 개발자 콘솔에 표시합니다.
+		function updateWebRtcStatus(eventName = 'state') {
+			if (!pc) return;
+			const ice = pc.iceConnectionState;
+			const connection = pc.connectionState;
+			const signaling = pc.signalingState;
+			console.info(`[WebRTC ${onlineRole || 'peer'}] ${eventName}`, {
+				iceConnectionState: ice,
+				connectionState: connection,
+				signalingState: signaling,
+				dataChannelState: dc ? dc.readyState : 'not-created',
+				roomCode
+			});
+
+			let message = '상대방의 연결 정보를 기다리고 있습니다...';
+			if (connection === 'connected' || ice === 'connected' || ice === 'completed') {
+				message = dc && dc.readyState === 'open'
+					? '상대방과 연결되었습니다. 게임을 준비합니다...'
+					: '인터넷 연결 경로가 설정되었습니다. 게임 통신 채널을 여는 중입니다...';
+			} else if (connection === 'failed' || ice === 'failed') {
+				message = '상대방의 연결 경로를 찾지 못했습니다. 시그널 교환은 되었지만 네트워크가 P2P 연결을 차단했을 수 있습니다. TURN 서버 설정이 필요할 수 있습니다.';
+			} else if (connection === 'disconnected' || ice === 'disconnected') {
+				message = '상대방과의 네트워크 연결이 끊겼습니다. 재연결을 확인하고 있습니다...';
+			} else if (ice === 'checking' || connection === 'connecting') {
+				message = '상대방과 인터넷 연결을 시도하고 있습니다... (ICE checking)';
+			} else if (pc.iceGatheringState === 'gathering') {
+				message = '내 기기의 네트워크 연결 정보를 수집하고 있습니다...';
+			} else if (signaling === 'have-local-offer') {
+				message = '방 생성 완료. 상대방의 접속과 응답을 기다리고 있습니다...';
+			} else if (signaling === 'have-remote-offer') {
+				message = '방장의 연결 정보를 받았습니다. 응답을 보내고 있습니다...';
+			}
+
+			if (lobbyInfo && onlineLobby && onlineLobby.style.display !== 'none') {
+				const codeLine = roomCode ? `방 번호: [ ${roomCode} ]\n` : '';
+				lobbyInfo.textContent = `${codeLine}${message}`;
+			}
+		}
+
+		function attachWebRtcDiagnostics(role) {
+			if (!pc) return;
+			onlineRole = role;
+			pc.onconnectionstatechange = () => updateWebRtcStatus('connectionstatechange');
+			pc.oniceconnectionstatechange = () => updateWebRtcStatus('iceconnectionstatechange');
+			pc.onicegatheringstatechange = () => updateWebRtcStatus('icegatheringstatechange');
+			pc.onsignalingstatechange = () => updateWebRtcStatus('signalingstatechange');
+			pc.onicecandidateerror = event => {
+				console.warn(`[WebRTC ${role}] ICE candidate error`, {
+					url: event.url,
+					errorCode: event.errorCode,
+					errorText: event.errorText
+				});
+			};
+		}
+
 		async function sendSignal(type, payload) {
 			if (!roomCode) throw new Error('대전방 코드가 없습니다.');
 			await apiRequest(`/rooms/${encodeURIComponent(roomCode)}/signals`, {
@@ -1424,6 +1480,7 @@
 
 		async function handleSignal(signal) {
 			if (!pc || !signal) return;
+			console.info(`[WebRTC ${onlineRole || 'peer'}] 신호 수신:`, signal.type, signal.id);
 			if (signal.type === 'offer' && localPlayerIndex === 1 && !pc.remoteDescription) {
 				await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
 				remoteDescriptionReady = true;
@@ -1453,6 +1510,7 @@
 			signalPolling = true;
 			try {
 				const data = await apiRequest(`/rooms/${encodeURIComponent(roomCode)}/signals?after=${encodeURIComponent(lastSignalId)}`);
+				if ((data.signals || []).length) console.info(`[WebRTC ${onlineRole || 'peer'}] 새 연결 신호 ${data.signals.length}개 수신`);
 				for (const signal of data.signals || []) {
 					lastSignalId = String(signal.id);
 					await handleSignal(signal);
@@ -1492,17 +1550,14 @@
 				setupDataChannel();
 				pc.onicecandidate = e => {
 					if (e.candidate) sendSignal('candidate', { candidate: e.candidate.toJSON() })
-						.catch(err => console.error('호스트 ICE 후보 전송 실패:', err));
+						.catch(err => { console.error('호스트 ICE 후보 전송 실패:', err); updateWebRtcStatus('ICE 후보 전송 실패'); });
 				};
-				pc.onconnectionstatechange = () => {
-					if (pc && ['failed', 'disconnected'].includes(pc.connectionState)) {
-						lobbyInfo.textContent = '상대방과의 연결이 불안정합니다. 네트워크를 확인해 주세요.';
-					}
-				};
+				attachWebRtcDiagnostics('HOST');
 
 				const offer = await pc.createOffer();
 				await pc.setLocalDescription(offer);
 				await sendSignal('offer', pc.localDescription.toJSON());
+				updateWebRtcStatus('호스트 offer 전송 완료');
 				startSignalPolling();
 			} catch (e) {
 				lobbyInfo.textContent = `방 생성 오류: ${e.message}`;
@@ -1522,13 +1577,9 @@
 				pc.ondatachannel = e => { dc = e.channel; setupDataChannel(); };
 				pc.onicecandidate = e => {
 					if (e.candidate) sendSignal('candidate', { candidate: e.candidate.toJSON() })
-						.catch(err => console.error('참가자 ICE 후보 전송 실패:', err));
+						.catch(err => { console.error('참가자 ICE 후보 전송 실패:', err); updateWebRtcStatus('ICE 후보 전송 실패'); });
 				};
-				pc.onconnectionstatechange = () => {
-					if (pc && ['failed', 'disconnected'].includes(pc.connectionState)) {
-						lobbyInfo.textContent = '호스트와 연결되지 않았습니다. 다시 시도해 주세요.';
-					}
-				};
+				attachWebRtcDiagnostics('GUEST');
 
 				lobbyInfo.textContent = '호스트의 연결 정보를 기다리고 있습니다...';
 				startSignalPolling();
@@ -1580,7 +1631,7 @@
 			if (roomCode && playerToken) {
 				apiRequest(`/rooms/${encodeURIComponent(roomCode)}/leave`, { method: 'POST', body: {} }).catch(() => { });
 			}
-			roomCode = null; remoteDescriptionReady = false; pendingRemoteCandidates = [];
+			roomCode = null; onlineRole = null; remoteDescriptionReady = false; pendingRemoteCandidates = [];
 			if (dc) { dc.close(); dc = null; }
 			if (pc) { pc.close(); pc = null; }
 			mainMenu.style.display = 'flex'; sel.style.display = 'none'; pauseMenu.style.display = 'none'; btnPause.style.display = 'none'; onlineLobby.style.display = 'none';
