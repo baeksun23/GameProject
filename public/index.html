@@ -456,10 +456,11 @@
 				<div id="user-stats"
 					style="color: #00ffff; font-size: 14px; text-align: center; margin-top: 5px; font-weight: bold; text-shadow: 0 0 5px rgba(0, 255, 255, 0.5);">
 					온라인 전적: 불러오는 중...</div>
+				<button id="btn-bgm" class="menu-btn small" type="button" style="border-color:#a78bfa;color:#c4b5fd;">BGM: ON</button>
 			</div>
 			<div class="controls-info">
 				<b>[P1]</b> WASD 이동 (W 점프, S 가드) / J 약, K 강, L 스킬 / 더블탭 또는 방향 대시<br>
-				<b>[P2]</b> 방향키 이동 (↑ 점프, ↓ 가드) / Num1 약, Num2 강, Num3 스킬<br>
+				<b>[P2]</b> 오프라인 2P: 방향키·Num1/2/3 / 온라인: P1과 같은 WASD·J/K/L 키 사용<br>
 				<b>[ESC]</b> 일시정지 메뉴
 			</div>
 		</div>
@@ -509,10 +510,57 @@
 		</div>
 	</div>
 
+	<audio id="bgm-audio" preload="none"></audio>
+
 	<script type="module">
 
 		const cv = document.getElementById('c'), g = cv.getContext('2d'), W = 600, H = 280, GY = 230, KS = 1.25;
 		g.imageSmoothingEnabled = false;
+
+		// 배경음악: public/music/playlist.json에 등록된 WAV 4곡을 중복 없이 셔플 재생
+		const bgmAudio = document.getElementById('bgm-audio');
+		const bgmButton = document.getElementById('btn-bgm');
+		let bgmTracks = [], bgmQueue = [], bgmEnabled = true, bgmStarted = false, bgmGestureSeen = false;
+		function shuffleBgmQueue() {
+			bgmQueue = [...bgmTracks];
+			for (let i = bgmQueue.length - 1; i > 0; i--) {
+				const j = Math.floor(Math.random() * (i + 1));
+				[bgmQueue[i], bgmQueue[j]] = [bgmQueue[j], bgmQueue[i]];
+			}
+		}
+		async function playNextBgm() {
+			if (!bgmEnabled || !bgmTracks.length) return;
+			if (!bgmQueue.length) shuffleBgmQueue();
+			const track = bgmQueue.shift();
+			bgmAudio.src = track;
+			try { await bgmAudio.play(); bgmStarted = true; }
+			catch (error) { console.info('[BGM] 브라우저 재생 허용 대기:', error?.message || error); }
+		}
+		async function initBgm() {
+			try {
+				const response = await fetch('/music/playlist.json', { cache: 'no-cache' });
+				if (!response.ok) throw new Error('playlist.json을 읽을 수 없습니다.');
+				const data = await response.json();
+				bgmTracks = Array.isArray(data.tracks) ? data.tracks.filter(x => typeof x === 'string' && x.toLowerCase().endsWith('.wav')) : [];
+				if (bgmTracks.length !== 4) console.warn(`[BGM] WAV 트랙은 4개 등록을 권장합니다. 현재 ${bgmTracks.length}개`);
+				shuffleBgmQueue();
+				if (bgmGestureSeen && bgmEnabled) playNextBgm();
+			} catch (error) { console.warn('[BGM] 음악 목록을 불러오지 못했습니다:', error.message); }
+		}
+		function startBgmAfterGesture() {
+			bgmGestureSeen = true;
+			if (bgmEnabled && !bgmStarted && bgmTracks.length) playNextBgm();
+		}
+		bgmAudio.addEventListener('ended', playNextBgm);
+		bgmButton?.addEventListener('click', async () => {
+			bgmEnabled = !bgmEnabled;
+			bgmButton.textContent = `BGM: ${bgmEnabled ? 'ON' : 'OFF'}`;
+			if (!bgmEnabled) { bgmAudio.pause(); bgmStarted = false; }
+			else if (bgmTracks.length) { if (!bgmAudio.src || bgmAudio.ended) await playNextBgm(); else { try { await bgmAudio.play(); bgmStarted = true; } catch {} } }
+		});
+		window.addEventListener('pointerdown', startBgmAfterGesture, { once: true });
+		window.addEventListener('keydown', startBgmAfterGesture, { once: true });
+		initBgm();
 
 		const J = {
 			police: { n: '경찰', hp: 120, sp: 1.35, col: '#2f4f9e', L: { su: 4, ac: 3, rc: 10, d: 6, s: 13, r: 28 }, H: { su: 12, ac: 4, rc: 20, d: 15, s: 22, r: 36, gb: 1, leg: 1 }, tx: '균형형 · 방패 돌진' },
@@ -1044,7 +1092,7 @@
 		const SH = (x, y, w, h, c) => { B(x, y, w, h, c); R(x, y, 1, h, mx(c, '#ffffff', .3)); R(x, y + h - 1, w, 1, mx(c, '#000000', .3)) };
 
 		// 직접 캔버스 렌더링
-		function drawF6(f, isTrail = false) {
+		function drawF6(f, isTrail = false, playerIndex = 0) {
 			const n = f.job, j = J[n], [tp, bt, hr, sk] = LK[n], s = f.face, fl = f.flash > 0 && !isTrail, hh = f.hs > 0, F = FM.has(n), po = pose(f, isTrail), X = Math.round(f.x * 2), Y = Math.round(f.y * 2), W1 = '#ffffff', kt = KIT[n] || KIT.police;
 			const T = fl ? W1 : tp, Bt = fl ? W1 : bt, SK = fl ? W1 : sk, HR = fl ? W1 : hr;
 			const ol = c => mx(c, '#12101c', .7), lt = c => mx(c, W1, .3), dk = c => mx(c, '#000000', .3);
@@ -1069,6 +1117,11 @@
 			if (f.hp <= 0) { const hx0 = s > 0 ? X - 60 : X + 36; A(X - 33, Y - 21, 68, 23, ol(T)); A(X - 32, Y - 20, 64, 20, T); A(s > 0 ? X + 32 : X - 58, Y - 19, 26, 19, Bt); A(hx0 - 1, Y - 25, 26, 26, ol(SK)); A(hx0, Y - 24, 24, 24, SK); A(hx0 + (s > 0 ? 10 : 4), Y - 14, 6, 2, '#12101c'); return }
 
 			if (!isTrail) { A(X - 30, GY * 2, 60, 4, 'rgba(0,0,0,.35)'); A(X - 22, GY * 2 + 4, 44, 2, 'rgba(0,0,0,.2)'); }
+			if (!isTrail) {
+				const playerColor = playerIndex === 0 ? '#22d3ee' : '#fb923c';
+				g.save(); g.globalAlpha = 0.9; g.strokeStyle = playerColor; g.lineWidth = 2; g.shadowColor = playerColor; g.shadowBlur = 9;
+				g.beginPath(); g.ellipse(X / 2, GY - 1, 16, 4, 0, 0, Math.PI * 2); g.stroke(); g.restore();
+			}
 
 			const air = f.y < GY - 1, crouch = (f.blk ? 8 : f.lose ? 20 : f.land > 0 ? 6 : 0) + (hh ? 4 : 0), bob = ((fc >> 4 & 1) && !f.atk && f.y >= GY && !f.mvg ? 2 : 0) + (f.mvg && ((f.walk >> 2) & 1) ? 2 : 0), hb = -50 + crouch - bob, sh = hb - 34, HY = Y + hb;
 			let fa = [X + s * 16, Y], fb = [X - s * 16, Y];
@@ -1146,10 +1199,10 @@
 				g.fillStyle = '#cc1111';
 				g.beginPath(); g.moveTo(bx, 15); g.lineTo(bx + dir * cw, 15); g.lineTo(bx + dir * cw - dir * 12, 28); g.lineTo(bx - dir * 12, 28); g.fill();
 
-				g.fillStyle = f.hp > f.mhp * 0.4 ? '#44ff44' : '#ffcc00';
+				g.fillStyle = f.hp <= f.mhp * 0.4 ? '#ffcc00' : (i === 0 ? '#22d3ee' : '#fb923c');
 				g.beginPath(); g.moveTo(bx, 15); g.lineTo(bx + dir * wd, 15); g.lineTo(bx + dir * wd - dir * 12, 28); g.lineTo(bx - dir * 12, 28); g.fill();
 
-				const gCol = f.gBreak > 0 ? '#ff3333' : '#00bfff';
+				const gCol = f.gBreak > 0 ? '#ff3333' : (i === 0 ? '#67e8f9' : '#fdba74');
 				g.fillStyle = '#222';
 				g.beginPath(); g.moveTo(bx - dir * 15, 31); g.lineTo(bx + dir * maxW - dir * 15, 31); g.lineTo(bx + dir * maxW - dir * 20, 36); g.lineTo(bx - dir * 20, 36); g.fill();
 				g.fillStyle = gCol;
@@ -1165,7 +1218,7 @@
 				R(i ? bx - 145 : bx + 50, 45, 90, 4, '#222');
 				R(i ? bx - 55 - cdw : bx + 50, 45, cdw, 4, f.cd <= 0 ? '#00ffff' : '#557799');
 
-				g.textAlign = i ? 'right' : 'left'; g.font = '900 13px Inter'; g.fillStyle = '#fff';
+				g.textAlign = i ? 'right' : 'left'; g.font = '900 13px Inter'; g.fillStyle = i === 0 ? '#67e8f9' : '#fdba74';
 				g.fillText((i ? (mode === 'cpu' ? 'CPU ' : 'P2 ') : 'P1 ') + J[f.job].n, i ? bx - 15 : bx + 15, 10);
 			});
 
@@ -1216,7 +1269,7 @@
 			});
 			trails = trails.filter(t => t.life > 0);
 
-			P.forEach(f => {
+			P.forEach((f, playerIndex) => {
 				if (f.mvg && fc % 9 === 0 && f.y >= GY) fx.push({ x: f.x - f.face * 6, y: GY - 1, vx: -f.face * 0.5, vy: -0.8, l: 10, c: '#777' });
 
 				const ox = f.hs > 0 ? -f.face * 3 : 0;
@@ -1225,7 +1278,7 @@
 				g.save();
 				if (f.stl > 0) g.globalAlpha = 0.3;
 				g.translate(ox, oy);
-				drawF6(f);
+				drawF6(f, false, playerIndex);
 				g.restore();
 			});
 
@@ -1652,15 +1705,21 @@
 				else if (st === 'pause') document.getElementById('btn-resume').click();
 				return;
 			}
-			if (K0[e.code]) { press(0, K0[e.code], 1); e.preventDefault(); }
-			if (mode === '2p' && K1[e.code]) { press(1, K1[e.code], 1); e.preventDefault(); }
-			if (mode === 'online' && localPlayerIndex === 1 && K1[e.code]) { press(1, K1[e.code], 1); e.preventDefault(); }
+			if (mode === 'online') {
+				if (K0[e.code]) { press(localPlayerIndex, K0[e.code], 1); e.preventDefault(); }
+			} else {
+				if (K0[e.code]) { press(0, K0[e.code], 1); e.preventDefault(); }
+				if (mode === '2p' && K1[e.code]) { press(1, K1[e.code], 1); e.preventDefault(); }
+			}
 		});
 
 		addEventListener('keyup', e => {
-			if (K0[e.code]) press(0, K0[e.code], 0);
-			if (mode === '2p' && K1[e.code]) press(1, K1[e.code], 0);
-			if (mode === 'online' && localPlayerIndex === 1 && K1[e.code]) press(1, K1[e.code], 0);
+			if (mode === 'online') {
+				if (K0[e.code]) press(localPlayerIndex, K0[e.code], 0);
+			} else {
+				if (K0[e.code]) press(0, K0[e.code], 0);
+				if (mode === '2p' && K1[e.code]) press(1, K1[e.code], 0);
+			}
 		});
 
 		cv.addEventListener('pointerdown', () => { if (st === 'end') showSel(); });
