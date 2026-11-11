@@ -98,7 +98,6 @@
 			width: 94%;
 			max-width: 760px;
 			max-height: 280px;
-			overflow-y: auto;
 			padding-right: 4px;
 		}
 
@@ -260,38 +259,145 @@
 			color: var(--acc);
 		}
 
-		/* 첫 화면 제목과 메뉴가 검은 게임 화면 밖으로 밀려나지 않도록 보정 */
+		/* 메인 메뉴: 로컬/온라인을 분리한 대시보드형 레이아웃 */
 		#main-menu {
-			padding: 14px 12px;
+			width: 100%;
+			max-width: none;
+			padding: clamp(14px, 2.5vw, 26px);
+			gap: 14px;
+			justify-content: safe center;
 			overflow-y: auto;
 			overscroll-behavior: contain;
 			-webkit-overflow-scrolling: touch;
-			justify-content: safe center;
 			touch-action: pan-y;
+			background: linear-gradient(145deg, rgba(7, 12, 25, .97), rgba(18, 10, 27, .96));
+			border: 1px solid rgba(148, 163, 184, .18);
+			box-shadow: inset 0 0 50px rgba(34, 211, 238, .045);
 		}
 
 		#main-menu .title-large {
-			font-size: clamp(28px, 4vw, 34px);
-			line-height: 1.12;
-			margin: 0 0 12px;
+			font-size: clamp(28px, 4vw, 40px);
+			line-height: 1.08;
+			letter-spacing: 3px;
+			margin: 0;
 			flex: 0 0 auto;
+			text-shadow: 0 0 18px rgba(244, 63, 94, .5);
 		}
 
 		#main-menu .title-large span {
 			display: inline-block;
-			font-size: clamp(16px, 2.2vw, 19px);
-			margin-top: 3px;
+			font-size: clamp(12px, 1.8vw, 16px);
+			letter-spacing: 4px;
+			margin-top: 7px;
+			color: #fb7185;
+		}
+
+		.main-menu-layout {
+			width: min(100%, 720px);
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: 12px;
+			flex: 0 0 auto;
+		}
+
+		.menu-panel {
+			min-width: 0;
+			padding: 13px;
+			border-radius: 12px;
+			background: rgba(15, 23, 42, .72);
+			border: 1px solid rgba(148, 163, 184, .18);
+			display: flex;
+			flex-direction: column;
+			gap: 9px;
+		}
+
+		.menu-panel h2 {
+			margin: 0 0 2px;
+			font-size: 12px;
+			letter-spacing: 1.5px;
+			color: #94a3b8;
+			font-weight: 900;
 		}
 
 		#main-menu .menu-btns {
+			width: 100%;
+			gap: 9px;
 			flex-shrink: 0;
 		}
 
+		#main-menu .menu-btn {
+			width: 100%;
+			min-height: 42px;
+			padding: 10px 12px;
+			font-size: 13px;
+			border-radius: 9px;
+			letter-spacing: .2px;
+		}
+
+		#main-menu #btn-start {
+			min-height: 48px;
+			background: linear-gradient(110deg, rgba(190, 24, 93, .32), rgba(244, 63, 94, .15));
+			border-color: #fb7185;
+			font-size: 14px;
+		}
+
+		#main-menu #btn-host,
+		#main-menu #btn-join {
+			border-color: rgba(34, 211, 238, .8) !important;
+			color: #a5f3fc !important;
+			background: rgba(8, 145, 178, .12);
+		}
+
+		#main-menu #btn-diff {
+			border-color: rgba(192, 132, 252, .8) !important;
+			color: #e9d5ff !important;
+			background: rgba(126, 34, 206, .12);
+		}
+
+		#user-stats {
+			margin-top: 2px !important;
+			padding: 10px 8px;
+			border-radius: 8px;
+			border: 1px solid rgba(34, 211, 238, .2);
+			background: rgba(8, 145, 178, .08);
+			font-size: 12px !important;
+			line-height: 1.4;
+		}
+
+		#main-menu #btn-bgm {
+			align-self: flex-start;
+			width: auto;
+			min-height: 34px;
+			padding: 7px 13px;
+			margin-top: 2px;
+			border-color: rgba(167, 139, 250, .75) !important;
+			color: #ddd6fe !important;
+			background: rgba(109, 40, 217, .12);
+			font-size: 11px;
+		}
+
 		#main-menu .controls-info {
-			margin-top: 12px;
-			padding: 11px;
-			font-size: 12px;
-			line-height: 1.55;
+			width: min(100%, 720px);
+			margin: 0;
+			padding: 12px 14px;
+			font-size: 11px;
+			line-height: 1.65;
+			text-align: left;
+			background: rgba(2, 6, 23, .58);
+			border: 1px solid rgba(148, 163, 184, .16);
+		}
+
+		#main-menu .controls-info b:first-child {
+			color: #67e8f9;
+			margin-right: 5px;
+		}
+
+		#main-menu .controls-info b:nth-of-type(4) {
+			color: #fda4af;
+		}
+
+		#main-menu .controls-info b:nth-of-type(7) {
+			color: #a4fdb3;
 		}
 
 		.menu-btns {
@@ -372,49 +478,71 @@
 		@media (max-height: 700px) {
 			#main-menu {
 				justify-content: flex-start;
-				gap: 10px;
+				gap: 9px;
 			}
 
 			#main-menu .title-large {
-				font-size: 30px;
-				margin-bottom: 4px;
+				font-size: 29px;
+			}
+
+			#main-menu .menu-panel {
+				padding: 10px;
+				gap: 7px;
+			}
+
+			#main-menu .menu-btn {
+				min-height: 37px;
+				padding: 8px 10px;
 			}
 
 			#main-menu .controls-info {
-				margin-top: 4px;
+				padding: 9px 12px;
 			}
 		}
 
 		@media (max-width: 600px) {
 			#main-menu {
 				justify-content: flex-start;
-				gap: 9px;
-				padding: 10px;
+				gap: 10px;
+				padding: 12px;
 			}
 
 			#main-menu .title-large {
-				font-size: clamp(25px, 7vw, 30px);
-				margin-bottom: 2px;
+				font-size: clamp(25px, 7vw, 31px);
 			}
 
 			#main-menu .title-large span {
-				font-size: clamp(14px, 4vw, 17px);
+				font-size: clamp(11px, 3.4vw, 14px);
+				letter-spacing: 2.5px;
+			}
+
+			.main-menu-layout {
+				grid-template-columns: 1fr;
+				gap: 9px;
+			}
+
+			.menu-panel {
+				padding: 11px;
 			}
 
 			#main-menu .menu-btns {
-				width: min(280px, 100%);
-				gap: 8px;
+				gap: 7px;
 			}
 
 			#main-menu .menu-btn {
-				padding: 10px;
-				font-size: 14px;
+				min-height: 39px;
+				padding: 9px 10px;
+				font-size: 12px;
+			}
+
+			#main-menu #btn-start {
+				min-height: 43px;
+				font-size: 13px;
 			}
 
 			#main-menu .controls-info {
-				font-size: 11px;
-				padding: 9px;
-				margin-top: 2px;
+				font-size: 10px;
+				padding: 10px;
 			}
 
 			#jb {
@@ -444,24 +572,37 @@
 
 		<div id="main-menu" class="overlay">
 			<div class="title-large">직업 대전<br><span>NEON CITY REMASTERED</span></div>
-			<div class="menu-btns">
-				<button id="btn-start" class="menu-btn">LOCAL MULTIPLAYER / CPU</button>
-				<button id="btn-mode" class="menu-btn">MODE: CPU BATTLE</button>
-				<button id="btn-diff" class="menu-btn" style="border-color:#ff00ff; color:#ff00ff;">DIFFICULTY:
-					NORMAL</button>
-				<button id="btn-host" class="menu-btn" style="border-color:#00ffff; color:#00ffff;">ONLINE PVP:
-					HOST</button>
-				<button id="btn-join" class="menu-btn" style="border-color:#00ffff; color:#00ffff;">ONLINE PVP:
-					JOIN</button>
-				<div id="user-stats"
-					style="color: #00ffff; font-size: 14px; text-align: center; margin-top: 5px; font-weight: bold; text-shadow: 0 0 5px rgba(0, 255, 255, 0.5);">
-					온라인 전적: 불러오는 중...</div>
-				<button id="btn-bgm" class="menu-btn small" type="button" style="border-color:#a78bfa;color:#c4b5fd;">BGM: ON</button>
+			<div class="main-menu-layout">
+				<section class="menu-panel">
+					<h2>OFFLINE BATTLE · 로컬 대전</h2>
+					<div class="menu-btns">
+						<button id="btn-start" class="menu-btn">대전 시작 · 캐릭터 선택</button>
+						<button id="btn-mode" class="menu-btn">MODE: CPU BATTLE</button>
+						<button id="btn-diff" class="menu-btn" style="border-color:#ff00ff; color:#ff00ff;">DIFFICULTY:
+							NORMAL</button>
+					</div>
+					<button id="btn-bgm" class="menu-btn small" type="button"
+						style="border-color:#a78bfa;color:#c4b5fd;">BGM: ON</button>
+				</section>
+				<section class="menu-panel">
+					<h2>ONLINE BATTLE · 온라인 대전</h2>
+					<div class="menu-btns">
+						<button id="btn-host" class="menu-btn" style="border-color:#00ffff; color:#00ffff;">방 만들기 ·
+							HOST</button>
+						<button id="btn-join" class="menu-btn" style="border-color:#00ffff; color:#00ffff;">방 참가하기 ·
+							JOIN</button>
+					</div>
+					<div id="user-stats">온라인 전적: 불러오는 중...</div>
+				</section>
 			</div>
 			<div class="controls-info">
-				<b>[P1]</b> WASD 이동 (W 점프, S 가드) / J 약, K 강, L 스킬 / 더블탭 또는 방향 대시<br>
-				<b>[P2]</b> 오프라인 2P: 방향키·Num1/2/3 / 온라인: P1과 같은 WASD·J/K/L 키 사용<br>
-				<b>[ESC]</b> 일시정지 메뉴
+				<b>{OFFLINE}</b><br>
+				<b>[P1]</b> WASD(W: 점프, S: 가드, AS더블탭: 대쉬), J(약), K(강), L(스킬)<br>
+				<b>[P2]</b> 방향키(↑: 점프, ↓: 가드, ←→더블탭 : 대쉬), NUM1(약), NUM2(강), NUM3(스킬)<br>
+				<b>{ONLINE}</b><br>
+				<b>[P1]</b> WASD(W: 점프, S: 가드, AS더블탭: 대쉬), J(약), K(강), L(스킬)<br>
+				<b>[P2]</b> WASD(W: 점프, S: 가드, AS더블탭: 대쉬), J(약), K(강), L(스킬)<br>
+				<b>{ESC}</b> 메뉴<br>
 			</div>
 		</div>
 
@@ -556,7 +697,7 @@
 			bgmEnabled = !bgmEnabled;
 			bgmButton.textContent = `BGM: ${bgmEnabled ? 'ON' : 'OFF'}`;
 			if (!bgmEnabled) { bgmAudio.pause(); bgmStarted = false; }
-			else if (bgmTracks.length) { if (!bgmAudio.src || bgmAudio.ended) await playNextBgm(); else { try { await bgmAudio.play(); bgmStarted = true; } catch {} } }
+			else if (bgmTracks.length) { if (!bgmAudio.src || bgmAudio.ended) await playNextBgm(); else { try { await bgmAudio.play(); bgmStarted = true; } catch { } } }
 		});
 		window.addEventListener('pointerdown', startBgmAfterGesture, { once: true });
 		window.addEventListener('keydown', startBgmAfterGesture, { once: true });
@@ -1562,9 +1703,9 @@
 			} catch (error) {
 				lobbyInfo.textContent = `방 생성 오류: ${error.message}`;
 				console.error('방 생성/실시간 접속 실패:', error);
-				if (dc) { try { dc.close(); } catch {} dc = null; }
+				if (dc) { try { dc.close(); } catch { } dc = null; }
 				if (roomCode && playerToken) {
-					apiRequest(`/rooms/${encodeURIComponent(roomCode)}/leave`, { method: 'POST', body: {} }).catch(() => {});
+					apiRequest(`/rooms/${encodeURIComponent(roomCode)}/leave`, { method: 'POST', body: {} }).catch(() => { });
 				}
 			}
 		}
@@ -1584,9 +1725,9 @@
 			} catch (error) {
 				lobbyInfo.textContent = `참가 오류: ${error.message}`;
 				console.error('방 참가/실시간 접속 실패:', error);
-				if (dc) { try { dc.close(); } catch {} dc = null; }
+				if (dc) { try { dc.close(); } catch { } dc = null; }
 				if (roomCode && playerToken) {
-					apiRequest(`/rooms/${encodeURIComponent(roomCode)}/leave`, { method: 'POST', body: {} }).catch(() => {});
+					apiRequest(`/rooms/${encodeURIComponent(roomCode)}/leave`, { method: 'POST', body: {} }).catch(() => { });
 				}
 			}
 		}
